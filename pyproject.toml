@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "patchattack"
+version = "0.1.0"
+description = "Embedding-space universal adversarial patch attack (DINOv2 + on-device CNNs), targeting banana"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "requests>=2.31",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    "tqdm>=4.66",
+    "matplotlib>=3.8",
+    "pandas>=2.1",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
