@@ -262,6 +262,16 @@ class Demo:
                 refs[args.target_photo_idx % len(refs)], size, self.device
             )
 
+        # The Mat (pivot): a full-frame surface the object sits on, loaded from a grayscale PNG.
+        # Unlike a Patch it is not warped/placed -- it fills the frame around a centre window
+        # that shows the real object, so most of what the model sees is mat.
+        self.mat: torch.Tensor | None = None
+        if getattr(args, "mat_path", None):
+            mimg = Image.open(args.mat_path).convert("RGB")
+            self.mat = (
+                pil_to_tensor(mimg).float().div(255).clamp(0, 1).to(self.device)
+            )  # (3,H,W)
+
         self.labels = list(DEFAULT_LABELS)
         tv = torchvision.models
         print("loading models (first run downloads weights) ...")
@@ -384,11 +394,34 @@ class Demo:
         angle: float,
     ) -> torch.Tensor:
         """frame: (1,3,S,S) in [0,1]; x/y in [0,1] of the frame; area = fraction of frame area."""
+        if sticker == "mat":
+            return self.compose_mat(frame, x, y, area)
         if sticker not in self.stickers:
             return frame
         S = frame.shape[-1]
         params = fixed_eot_params(1, S, area, angle, x * S, y * S, self.device)
         return apply_patch(self.stickers[sticker], frame, params).clamp(0, 1)
+
+    def compose_mat(
+        self, frame: torch.Tensor, x: float, y: float, area: float
+    ) -> torch.Tensor:
+        """Fill the frame with the mat everywhere except a centre window (side^2 = `area` of the
+        frame, centred on x,y) that shows the real object -- so the model sees mostly mat, exactly
+        the 'object sitting on the mat' scenario. `area` is the object window, not the mat."""
+        if self.mat is None:
+            return frame
+        S = frame.shape[-1]
+        mat = F.interpolate(
+            self.mat.unsqueeze(0), size=S, mode="bilinear", align_corners=False
+        )[0]
+        side = int(round(S * (area**0.5)))
+        side = max(1, min(side, S))
+        x0 = min(max(int(x * S) - side // 2, 0), S - side)
+        y0 = min(max(int(y * S) - side // 2, 0), S - side)
+        mask = torch.zeros(1, S, S, device=self.device)
+        mask[:, y0 : y0 + side, x0 : x0 + side] = 1.0
+        out = mask * frame[0] + (1.0 - mask) * mat
+        return out.unsqueeze(0).clamp(0, 1)
 
     # ---- inference
     @torch.no_grad()
@@ -525,7 +558,8 @@ def build_app(demo: Demo):
             {
                 "models": demo.infos,
                 "labels": demo.labels,
-                "stickers": list(demo.stickers),
+                "stickers": list(demo.stickers)
+                + (["mat"] if demo.mat is not None else []),
                 "target": demo.target,
                 "patch": demo.patch_info,
             }
@@ -613,6 +647,13 @@ def main():
         nargs="*",
         default=DEFAULT_VLMS,
         help="HF chat-VLM ids, e.g. Qwen/Qwen2.5-VL-3B-Instruct; pass --vlm with no ids to disable",
+    )
+    ap.add_argument(
+        "--mat-path",
+        type=Path,
+        default=None,
+        help="grayscale PNG of a trained Mat (train_mat.py). Adds a 'mat' sticker mode that "
+        "fills the frame around a centre window showing the real object.",
     )
     ap.add_argument("--detector", default="yolo11n-seg.pt")
     ap.add_argument("--no-detector", action="store_true")

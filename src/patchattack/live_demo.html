@@ -79,7 +79,8 @@
 </main>
 <script>
 const STICKER_NAMES = { none:"camera only (use for a printed patch)", patch:"adversarial patch",
-                        photo:"real photo of target (control)", noise:"random noise (control)" };
+                        photo:"real photo of target (control)", noise:"random noise (control)",
+                        mat:"the mat (object in centre window)" };
 const $ = id => document.getElementById(id);
 let models = [], target = "banana", busy = false;
 const settings = { sticker:"patch", x:0.72, y:0.72, area:0.12, angle:0, overlay:true };
