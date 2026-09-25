@@ -76,3 +76,27 @@ def plot_success_vs_area(df: pd.DataFrame, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=130)
     plt.close(fig)
+
+
+def plot_vlm_hit_rate(df: pd.DataFrame, out_path: Path, target: str) -> None:
+    """One line per VLM: solid = adversarial patch, dashed = random-noise patch of the
+    same size/placement, dotted horizontal = clean-image baseline."""
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for vlm, g in df.groupby("vlm"):
+        label = vlm.split("/")[-1]
+        adv = g[g["condition"] == "adversarial"].sort_values("area_frac")
+        (line,) = ax.plot(adv["area_frac"] * 100, adv["hit_rate"] * 100, marker="o", label=label)
+        rnd = g[g["condition"] == "random_patch"].sort_values("area_frac")
+        ax.plot(rnd["area_frac"] * 100, rnd["hit_rate"] * 100, marker="x", linestyle="--",
+                color=line.get_color(), alpha=0.6)
+        clean = g[g["condition"] == "clean"]["hit_rate"]
+        if len(clean):
+            ax.axhline(clean.iloc[0] * 100, color=line.get_color(), linestyle=":", linewidth=1)
+    ax.set_xlabel("patch area as % of image")
+    ax.set_ylabel(f"answers mentioning '{target}' (%)")
+    ax.set_title("VLM transfer (solid = adversarial, dashed = random patch, dotted = clean)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
