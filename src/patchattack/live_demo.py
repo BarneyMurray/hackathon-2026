@@ -153,9 +153,11 @@ class Detector:
 
     def __call__(self, frames_uint8: list[np.ndarray]):
         """frames: HxWx3 RGB uint8. Returns (per-frame detections, per-frame annotated RGB)."""
-        # ultralytics expects BGR numpy arrays
+        # ultralytics expects BGR numpy arrays; make them contiguous because r.plot()
+        # asserts contiguity on orig_img and a bare ::-1 view has a negative stride
+        # (otherwise the overlay path crashes the worker, taking the MPS context with it).
         results = self.model.predict(
-            [f[:, :, ::-1] for f in frames_uint8],
+            [np.ascontiguousarray(f[:, :, ::-1]) for f in frames_uint8],
             device=self.device,
             conf=0.25,
             verbose=False,
