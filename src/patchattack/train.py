@@ -12,8 +12,17 @@ import torch.nn.functional as F
 from patchattack.data import make_background_loader
 from patchattack.models import default_device, load_ensemble
 from patchattack.patch import Patch
-from patchattack.reference_embeddings import BANANA_REFS, load_or_compute_training_target
-from patchattack.transforms import BOTTOM_LEFT_CORNER, EOTConfig, apply_patch, sample_eot_params
+from patchattack.reference_embeddings import (
+    BANANA_REFS,
+    load_or_compute_training_target,
+)
+from patchattack.transforms import (
+    BOTTOM_LEFT_CORNER,
+    EOTConfig,
+    apply_patch,
+    camera_augment,
+    sample_eot_params,
+)
 from patchattack.viz import plot_training_curves, save_patch_preview
 
 OUT_ROOT = Path(__file__).resolve().parent.parent.parent / "outputs" / "patches"
@@ -41,6 +50,7 @@ class TrainConfig:
     background_dataset: str = "imagenette"
     val_every: int = 0  # 0 disables held-out validation checks; e.g. 600 to check every 600 steps
     val_batches: int = 4  # batches averaged per validation check (variance reduction on small pools)
+    camera_strength: float = 0.0  # >0 enables whole-frame camera_augment (physical-world EOT)
 
 
 def cycle(loader):
@@ -106,12 +116,13 @@ def train(cfg: TrainConfig) -> Path:
                     area_frac_range=(cfg.fixed_area_frac, cfg.fixed_area_frac),
                     log_uniform_area=False,
                     corner=eot_cfg.corner, corner_margin_px=eot_cfg.corner_margin_px, corner_jitter_frac=eot_cfg.corner_jitter_frac,
+                    squash_min=eot_cfg.squash_min, print_color_jitter=eot_cfg.print_color_jitter,
                 )
                 params = sample_eot_params(B, fixed_cfg, device)
             else:
                 params = sample_eot_params(B, eot_cfg, device)
 
-            composite = apply_patch(patch, bg, params)
+            composite = camera_augment(apply_patch(patch, bg, params), cfg.camera_strength)
 
             per_model_loss = {}
             for name, model in models.items():
@@ -144,7 +155,7 @@ def train(cfg: TrainConfig) -> Path:
                     for _ in range(cfg.val_batches):
                         val_bg = next(val_loader_iter).to(device)
                         val_params = sample_eot_params(val_bg.shape[0], eot_cfg, device)
-                        val_composite = apply_patch(patch, val_bg, val_params)
+                        val_composite = camera_augment(apply_patch(patch, val_bg, val_params), cfg.camera_strength)
                         for name, model in models.items():
                             emb = model.embed(val_composite)
                             emb = F.normalize(emb, dim=-1)
@@ -190,6 +201,9 @@ def main():
                      help="run a held-out validation check every N steps (0 disables); "
                           "useful to catch overfitting on small background pools")
     ap.add_argument("--val-batches", type=int, default=4)
+    ap.add_argument("--physical", action="store_true",
+                     help="physical-world EOT for a patch you print and hold up to a camera: "
+                          "perspective squash, print colour jitter, and camera exposure/blur/noise")
     args = ap.parse_args()
 
     cfg = TrainConfig(
@@ -204,7 +218,10 @@ def main():
             canonical_size=args.canonical_size,
             area_frac_range=(args.area_min, args.area_max),
             corner=BOTTOM_LEFT_CORNER if args.corner else None,
+            squash_min=0.6 if args.physical else 1.0,
+            print_color_jitter=0.1 if args.physical else 0.0,
         ),
+        camera_strength=1.0 if args.physical else 0.0,
         fixed_area_frac=args.fixed_area_frac,
         target_name=args.target_name,
         target_refs_dir=args.target_refs_dir,

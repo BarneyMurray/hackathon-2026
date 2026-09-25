@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patch Live Demo</title>
+<style>
+  :root { --bg:#f6f6f4; --card:#fff; --ink:#1b1b1b; --mute:#6b6b6b; --line:#e3e3df;
+          --hit:#f5c518; --hit-ink:#3b2f00; --seen:#2f6fdb; --unseen:#1f9d55; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#141414; --card:#1e1e1e; --ink:#eee; --mute:#9a9a9a; --line:#2e2e2e; } }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui,-apple-system,sans-serif }
+  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap }
+  header h1 { font-size:17px; margin:0 }
+  header .mute { color:var(--mute) }
+  main { display:grid; grid-template-columns:minmax(300px,480px) 1fr; gap:16px; padding:16px }
+  @media (max-width:900px) { main { grid-template-columns:1fr } }
+  .stage { position:relative; aspect-ratio:1; background:#000; border-radius:10px; overflow:hidden; cursor:crosshair }
+  .stage img { width:100%; height:100%; display:block }
+  .stage .hint { position:absolute; left:8px; bottom:8px; color:#fff; background:#0008; padding:2px 8px; border-radius:6px; font-size:12px }
+  video, #grab { display:none }
+  .controls { margin-top:12px; display:grid; gap:10px }
+  .seg { display:flex; flex-wrap:wrap; gap:6px }
+  .seg button { border:1px solid var(--line); background:var(--card); color:var(--ink); padding:6px 10px; border-radius:8px; cursor:pointer }
+  .seg button.on { background:var(--ink); color:var(--bg); border-color:var(--ink) }
+  label.row { display:flex; gap:8px; align-items:center }
+  label.row input[type=range] { flex:1 }
+  textarea { width:100%; min-height:54px; background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:6px; font:12px ui-monospace,monospace }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:10px; align-content:start }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px }
+  .card h3 { margin:0; font-size:14px; display:flex; justify-content:space-between; gap:6px }
+  .card .era { color:var(--mute); font-size:12px }
+  .badge { font-size:11px; padding:1px 6px; border-radius:99px; color:#fff; white-space:nowrap; align-self:center }
+  .badge.seen { background:var(--seen) } .badge.unseen { background:var(--unseen) }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px }
+  .cols.one { grid-template-columns:1fr }
+  .col h4 { margin:0 0 3px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--mute) }
+  .pred { display:flex; justify-content:space-between; gap:6px; padding:2px 4px; border-radius:4px; font-size:13px }
+  .pred .p { color:var(--mute); font-variant-numeric:tabular-nums }
+  .pred.hit { background:var(--hit); color:var(--hit-ink) } .pred.hit .p { color:var(--hit-ink) }
+  .card.fooled { outline:2px solid var(--hit) }
+  .ms { color:var(--mute); font-size:11px; margin-top:4px }
+  a { color:inherit }
+</style>
+</head>
+<body>
+<header>
+  <h1>Can a sticker change what vision models see?</h1>
+  <span class="mute" id="status">connecting…</span>
+  <span class="mute" id="patchinfo"></span>
+  <a href="/print" target="_blank">print the patch</a>
+</header>
+<main>
+  <section>
+    <div class="stage" id="stage"><img id="view" alt="what the models see"><span class="hint" id="hint">click to move the sticker</span></div>
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="grab" width="448" height="448"></canvas>
+    <div class="controls">
+      <div>
+        <div class="mute" style="margin-bottom:4px">Sticker pasted on the frame</div>
+        <div class="seg" id="stickers"></div>
+      </div>
+      <label class="row">size <input type="range" id="area" min="0.02" max="0.35" step="0.01" value="0.12"><span id="areaVal">12%</span></label>
+      <label class="row">rotate <input type="range" id="angle" min="-45" max="45" step="1" value="0"></label>
+      <label class="row"><input type="checkbox" id="overlay" checked> show YOLO boxes/masks</label>
+      <div>
+        <div class="mute" style="margin-bottom:4px">Zero-shot labels for CLIP / SigLIP (one per line)</div>
+        <textarea id="labels"></textarea>
+      </div>
+    </div>
+  </section>
+  <section class="grid" id="cards"></section>
+</main>
+<script>
+const STICKER_NAMES = { none:"camera only (use for a printed patch)", patch:"adversarial patch",
+                        photo:"real photo of target (control)", noise:"random noise (control)" };
+const $ = id => document.getElementById(id);
+let ws, models = [], target = "banana", busy = false;
+const settings = { sticker:"patch", x:0.72, y:0.72, area:0.12, angle:0, overlay:true };
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+function renderStickers(available) {
+  const box = $("stickers"); box.innerHTML = "";
+  for (const k of ["none", ...available]) {
+    const b = document.createElement("button");
+    b.textContent = STICKER_NAMES[k] || k; b.dataset.k = k;
+    b.className = settings.sticker === k ? "on" : "";
+    b.onclick = () => { settings.sticker = k; send({ sticker:k }); renderStickers(available); };
+    box.appendChild(b);
+  }
+  $("hint").style.display = settings.sticker === "none" ? "none" : "";
+}
+
+function renderCards() {
+  $("cards").innerHTML = models.map(m => `
+    <div class="card" id="card-${CSS.escape(m.key)}">
+      <h3><span>${m.name}</span><span class="badge ${m.seen ? "seen" : "unseen"}">${m.seen ? "trained against" : "never seen"}</span></h3>
+      <div class="era">${m.era} · ${m.task}</div>
+      <div class="cols"></div><div class="ms"></div>
+    </div>`).join("");
+}
+
+const isHit = label => label.toLowerCase().includes(target.toLowerCase());
+const esc = s => s.replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c]));
+
+function renderResults(msg) {
+  $("view").src = "data:image/jpeg;base64," + msg.image;
+  for (const m of models) {
+    const card = document.getElementById("card-" + m.key); if (!card) continue;
+    const r = msg.results[m.key] || {};
+    const cols = card.querySelector(".cols");
+    cols.className = "cols" + (msg.views.length === 1 ? " one" : "");
+    let fooled = false;
+    cols.innerHTML = msg.views.map(v => {
+      const preds = r[v] || [];
+      const isVlm = m.key.startsWith("vlm:");
+      const rows = preds.length ? preds.map(([label, p]) => {
+        const hit = isHit(label); if (hit && v !== "clean") fooled = true;
+        return `<div class="pred${hit ? " hit" : ""}"><span>${esc(label)}</span>${isVlm ? "" : `<span class="p">${(p*100).toFixed(0)}%</span>`}</div>`;
+      }).join("") : `<div class="pred"><span class="p">${isVlm ? "thinking…" : "nothing detected"}</span></div>`;
+      return `<div class="col"><h4>${v === "clean" ? "camera only" : "with sticker"}</h4>${rows}</div>`;
+    }).join("");
+    card.classList.toggle("fooled", fooled);
+    card.querySelector(".ms").textContent = msg.timings[m.key] != null ? msg.timings[m.key] + " ms" : "";
+  }
+}
+
+async function start() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:1280, height:720 }, audio:false });
+  $("video").srcObject = stream;
+  await $("video").play();
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => $("status").textContent = "live";
+  ws.onclose = () => $("status").textContent = "disconnected - restart the server and reload";
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "hello") {
+      models = msg.models; target = msg.target;
+      if (!msg.stickers.includes("patch")) settings.sticker = "photo";
+      $("labels").value = msg.labels.join("\n");
+      $("patchinfo").textContent = msg.patch
+        ? `patch: ${msg.patch.run} · target "${target}"${msg.patch.physical ? " · print-robust" : ""}`
+        : "no patch loaded (controls only)";
+      renderStickers(msg.stickers); renderCards(); send(settings); loop();
+    } else if (msg.type === "result") { renderResults(msg); busy = false; }
+  };
+}
+
+// one frame in flight at a time: send the next only after the previous result is back
+function loop() {
+  if (!busy && ws.readyState === 1) {
+    const v = $("video"), side = Math.min(v.videoWidth, v.videoHeight);
+    const ctx = $("grab").getContext("2d");
+    ctx.drawImage(v, (v.videoWidth - side) / 2, (v.videoHeight - side) / 2, side, side, 0, 0, 448, 448);
+    busy = true;
+    $("grab").toBlob(b => b.arrayBuffer().then(buf => ws.send(buf)), "image/jpeg", 0.85);
+  }
+  requestAnimationFrame(loop);
+}
+
+$("stage").onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  settings.x = (e.clientX - r.left) / r.width; settings.y = (e.clientY - r.top) / r.height;
+  send({ x:settings.x, y:settings.y });
+};
+$("area").oninput = e => { settings.area = +e.target.value; $("areaVal").textContent = Math.round(settings.area*100) + "%"; send({ area:settings.area }); };
+$("angle").oninput = e => { settings.angle = +e.target.value; send({ angle:settings.angle }); };
+$("overlay").onchange = e => send({ overlay:e.target.checked });
+let labelTimer;
+$("labels").oninput = () => { clearTimeout(labelTimer); labelTimer = setTimeout(() => send({ labels:$("labels").value.split("\n") }), 600); };
+
+start().catch(err => { $("status").textContent = "camera error: " + err.message; });
+</script>
+</body>
+</html>

@@ -27,6 +27,13 @@ vlm = [
     "accelerate",
     "num2words",  # SmolVLM processor dependency
 ]
+# live webcam demo (live_demo.py): vlm extra + a web server and the YOLO detector
+demo = [
+    "patchattack[vlm]",
+    "fastapi",
+    "uvicorn[standard]",
+    "ultralytics",
+]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }
@@ -40,3 +47,6 @@ explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+patchattack = ["live_demo.html"]
