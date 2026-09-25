@@ -42,6 +42,11 @@
   .card.fooled { outline:2px solid var(--hit) }
   .ms { color:var(--mute); font-size:11px; margin-top:4px }
   a { color:inherit }
+  .camerr { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+            justify-content:center; gap:10px; padding:20px; text-align:center; color:#fff;
+            background:#000c; font-size:13px }
+  .camerr button { border:1px solid #fff6; background:#fff; color:#000; padding:8px 14px;
+                   border-radius:8px; cursor:pointer; font-size:14px }
 </style>
 </head>
 <body>
@@ -53,7 +58,7 @@
 </header>
 <main>
   <section>
-    <div class="stage" id="stage"><img id="view" alt="what the models see"><span class="hint" id="hint">click to move the sticker</span></div>
+    <div class="stage" id="stage"><img id="view" alt="what the models see"><span class="hint" id="hint">click to move the sticker</span><div class="camerr" id="camerr" style="display:none"></div></div>
     <video id="video" autoplay playsinline muted></video>
     <canvas id="grab" width="448" height="448"></canvas>
     <div class="controls">
@@ -76,10 +81,16 @@
 const STICKER_NAMES = { none:"camera only (use for a printed patch)", patch:"adversarial patch",
                         photo:"real photo of target (control)", noise:"random noise (control)" };
 const $ = id => document.getElementById(id);
-let ws, models = [], target = "banana", busy = false;
+let models = [], target = "banana", busy = false;
 const settings = { sticker:"patch", x:0.72, y:0.72, area:0.12, angle:0, overlay:true };
 
-function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+// settings live client-side and ride along as query params on each /infer POST, so there is
+// nothing to "send" separately; labels change rarely, via their own POST.
+function send() {}
+function pushLabels(list) {
+  fetch("/labels", { method:"POST", headers:{ "content-type":"application/json" },
+                     body: JSON.stringify({ labels:list }) }).catch(() => {});
+}
 
 function renderStickers(available) {
   const box = $("stickers"); box.innerHTML = "";
@@ -127,37 +138,72 @@ function renderResults(msg) {
   }
 }
 
-async function start() {
-  const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:1280, height:720 }, audio:false });
-  $("video").srcObject = stream;
-  await $("video").play();
-  ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => $("status").textContent = "live";
-  ws.onclose = () => $("status").textContent = "disconnected - restart the server and reload";
-  ws.onmessage = ev => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "hello") {
-      models = msg.models; target = msg.target;
-      if (!msg.stickers.includes("patch")) settings.sticker = "photo";
-      $("labels").value = msg.labels.join("\n");
-      $("patchinfo").textContent = msg.patch
-        ? `patch: ${msg.patch.run} · target "${target}"${msg.patch.physical ? " · print-robust" : ""}`
-        : "no patch loaded (controls only)";
-      renderStickers(msg.stickers); renderCards(); send(settings); loop();
-    } else if (msg.type === "result") { renderResults(msg); busy = false; }
-  };
+let camReady = false, metaOk = false;
+
+function setStatus() {
+  $("status").textContent = !metaOk ? "connecting…" : (camReady ? "live" : "connected — camera needed");
 }
 
-// one frame in flight at a time: send the next only after the previous result is back
-function loop() {
-  if (!busy && ws.readyState === 1) {
-    const v = $("video"), side = Math.min(v.videoWidth, v.videoHeight);
-    const ctx = $("grab").getContext("2d");
-    ctx.drawImage(v, (v.videoWidth - side) / 2, (v.videoHeight - side) / 2, side, side, 0, 0, 448, 448);
-    busy = true;
-    $("grab").toBlob(b => b.arrayBuffer().then(buf => ws.send(buf)), "image/jpeg", 0.85);
+// The model panel comes up first (from /meta), independent of the camera, so the page always
+// shows something even while the camera prompt is pending or was denied.
+async function fetchMeta() {
+  try {
+    const m = await (await fetch("/meta")).json();
+    models = m.models; target = m.target;
+    if (!m.stickers.includes("patch")) settings.sticker = "photo";
+    $("labels").value = m.labels.join("\n");
+    $("patchinfo").textContent = m.patch
+      ? `patch: ${m.patch.run} · target "${target}"${m.patch.physical ? " · print-robust" : ""}`
+      : "no patch loaded (controls only)";
+    metaOk = true; renderStickers(m.stickers); renderCards(); setStatus();
+    initCamera();
+  } catch (err) {
+    $("status").textContent = "cannot reach server — is it still running? " + (err.message || "");
   }
-  requestAnimationFrame(loop);
+}
+
+async function initCamera() {
+  const box = $("camerr");
+  box.style.display = "none";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    $("video").srcObject = stream;
+    await $("video").play();
+    camReady = true; setStatus(); loop();
+  } catch (err) {
+    camReady = false; setStatus();
+    box.style.display = "flex";
+    box.innerHTML = `<div>Camera not available: ${esc(err.name || "error")}.<br>` +
+      `Allow camera access for this page (click the camera icon in the address bar), ` +
+      `then retry. The model panel on the right already works.</div>`;
+    const btn = document.createElement("button");
+    btn.textContent = "Enable camera";
+    btn.onclick = initCamera;
+    box.appendChild(btn);
+  }
+}
+
+function qs() {
+  return `sticker=${encodeURIComponent(settings.sticker)}&x=${settings.x.toFixed(4)}` +
+    `&y=${settings.y.toFixed(4)}&area=${settings.area}&angle=${settings.angle}&overlay=${settings.overlay}`;
+}
+
+// one frame in flight at a time: POST the next only after the previous response is back
+function loop() {
+  if (camReady && !busy) {
+    const v = $("video"), side = Math.min(v.videoWidth, v.videoHeight);
+    if (side > 0) {
+      const ctx = $("grab").getContext("2d");
+      ctx.drawImage(v, (v.videoWidth - side) / 2, (v.videoHeight - side) / 2, side, side, 0, 0, 448, 448);
+      busy = true;
+      $("grab").toBlob(blob => {
+        fetch("/infer?" + qs(), { method:"POST", body:blob })
+          .then(r => r.json()).then(msg => { renderResults(msg); busy = false; })
+          .catch(() => { busy = false; });
+      }, "image/jpeg", 0.85);
+    }
+  }
+  if (camReady) requestAnimationFrame(loop);
 }
 
 $("stage").onclick = e => {
@@ -167,11 +213,11 @@ $("stage").onclick = e => {
 };
 $("area").oninput = e => { settings.area = +e.target.value; $("areaVal").textContent = Math.round(settings.area*100) + "%"; send({ area:settings.area }); };
 $("angle").oninput = e => { settings.angle = +e.target.value; send({ angle:settings.angle }); };
-$("overlay").onchange = e => send({ overlay:e.target.checked });
+$("overlay").onchange = e => { settings.overlay = e.target.checked; };
 let labelTimer;
-$("labels").oninput = () => { clearTimeout(labelTimer); labelTimer = setTimeout(() => send({ labels:$("labels").value.split("\n") }), 600); };
+$("labels").oninput = () => { clearTimeout(labelTimer); labelTimer = setTimeout(() => pushLabels($("labels").value.split("\n")), 600); };
 
-start().catch(err => { $("status").textContent = "camera error: " + err.message; });
+fetchMeta();
 </script>
 </body>
 </html>

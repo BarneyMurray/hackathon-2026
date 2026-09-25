@@ -22,7 +22,6 @@ import argparse
 import asyncio
 import base64
 import io
-import json
 import threading
 import time
 from dataclasses import dataclass
@@ -40,6 +39,14 @@ from patchattack.models import default_device
 from patchattack.patch import Patch
 from patchattack.reference_embeddings import BANANA_REFS
 from patchattack.transforms import apply_patch, fixed_eot_params
+
+# Imported at module scope so FastAPI can resolve the `request: Request` annotations under
+# `from __future__ import annotations` (get_type_hints looks these up in module globals, not in
+# build_app's local scope). fastapi is only needed to run the live server, hence the guard.
+try:
+    from fastapi import Request
+except ImportError:
+    Request = None  # type: ignore[assignment,misc]
 
 HTML_PATH = Path(__file__).with_name("live_demo.html")
 FRAME_SIZE = 448  # the browser sends a centre-square crop at this size
@@ -475,8 +482,8 @@ def _decode_frame(data: bytes, device: str) -> torch.Tensor:
 
 
 def build_app(demo: Demo):
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-    from fastapi.responses import HTMLResponse, Response
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse, JSONResponse, Response
 
     app = FastAPI()
 
@@ -511,41 +518,48 @@ def build_app(demo: Demo):
             "Cut out a circle and hold it next to or on an object.</p>" + imgs
         )
 
-    @app.websocket("/ws")
-    async def ws(sock: WebSocket):
-        await sock.accept()
-        await sock.send_text(
-            json.dumps(
-                {
-                    "type": "hello",
-                    "models": demo.infos,
-                    "labels": demo.labels,
-                    "stickers": list(demo.stickers),
-                    "target": demo.target,
-                    "patch": demo.patch_info,
-                }
-            )
+    @app.get("/meta")
+    def meta():
+        """Static description of the panel: model list, sticker options, labels, target."""
+        return JSONResponse(
+            {
+                "models": demo.infos,
+                "labels": demo.labels,
+                "stickers": list(demo.stickers),
+                "target": demo.target,
+                "patch": demo.patch_info,
+            }
         )
-        settings: dict = {"sticker": "patch" if "patch" in demo.stickers else "none"}
-        try:
-            while True:
-                msg = await sock.receive()
-                if msg.get("text"):
-                    data = json.loads(msg["text"])
-                    if "labels" in data:
-                        await asyncio.to_thread(
-                            demo.set_labels,
-                            [s for s in data.pop("labels") if s.strip()],
-                        )
-                    settings.update(data)
-                elif msg.get("bytes"):
-                    frame = _decode_frame(msg["bytes"], demo.device)
-                    out = await asyncio.to_thread(demo.infer, frame, settings)
-                    await sock.send_text(json.dumps(out))
-                elif msg.get("type") == "websocket.disconnect":
-                    break
-        except WebSocketDisconnect:
-            pass
+
+    @app.post("/labels")
+    async def labels(request: Request):
+        data = await request.json()
+        await asyncio.to_thread(
+            demo.set_labels, [s for s in data.get("labels", []) if s.strip()]
+        )
+        return JSONResponse({"ok": True})
+
+    @app.post("/infer")
+    async def infer(request: Request):
+        """Body: raw JPEG frame. Query: the scalar sticker settings. Returns the results JSON.
+
+        HTTP-per-frame instead of a websocket -- one request in flight at a time (the browser
+        waits for each response before sending the next), which is plenty for a live demo and
+        avoids the uvicorn/websockets handshake incompatibilities across versions.
+        """
+        q = request.query_params
+        settings = {
+            "sticker": q.get("sticker", "none"),
+            "x": float(q.get("x", 0.72)),
+            "y": float(q.get("y", 0.72)),
+            "area": float(q.get("area", 0.12)),
+            "angle": float(q.get("angle", 0.0)),
+            "overlay": q.get("overlay", "true") == "true",
+        }
+        body = await request.body()
+        frame = _decode_frame(body, demo.device)
+        out = await asyncio.to_thread(demo.infer, frame, settings)
+        return JSONResponse(out)
 
     return app
 
