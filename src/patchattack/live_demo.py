@@ -595,6 +595,22 @@ def build_app(demo: Demo):
     @app.get("/sticker/{name}.png")
     def sticker_png(name: str, px: int = 1024):
         """The sticker as a transparent PNG, upsampled for printing."""
+        if name == "mat":
+            # the mat is a full opaque surface (stored separately from the patch stickers),
+            # so serve it as a plain RGB square rather than a masked circular sticker.
+            if demo.mat is None:
+                return Response(
+                    "no mat loaded", status_code=404, media_type="text/plain"
+                )
+            rgb = F.interpolate(
+                demo.mat.detach().unsqueeze(0).cpu(),
+                size=px,
+                mode="bicubic",
+                align_corners=False,
+            ).clamp(0, 1)[0]
+            buf = io.BytesIO()
+            to_pil_image(rgb).save(buf, format="PNG")
+            return Response(buf.getvalue(), media_type="image/png")
         p = demo.stickers[name]
         rgba = torch.cat([p.pixels(), p.mask]).detach().unsqueeze(0).cpu()
         rgba = F.interpolate(rgba, size=px, mode="bicubic", align_corners=False).clamp(

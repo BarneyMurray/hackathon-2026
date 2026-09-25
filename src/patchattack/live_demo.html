@@ -5,104 +5,225 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Patch Live Demo</title>
 <style>
-  :root { --bg:#f6f6f4; --card:#fff; --ink:#1b1b1b; --mute:#6b6b6b; --line:#e3e3df;
-          --hit:#f5c518; --hit-ink:#3b2f00; --seen:#2f6fdb; --unseen:#1f9d55; }
+  :root {
+    --bg:#f4f4f2; --card:#fff; --ink:#161616; --mute:#6b6b6b; --line:#e4e4df;
+    --hit:#f5c518; --hit-ink:#3b2f00; --seen:#2f6fdb; --unseen:#1f9d55;
+    --accent:#e4572e; --ok:#1f9d55; --bad:#c23b3b;
+    --shadow:0 1px 2px #0000000d, 0 8px 24px #0000000a;
+  }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-    --bg:#141414; --card:#1e1e1e; --ink:#eee; --mute:#9a9a9a; --line:#2e2e2e; } }
+    --bg:#111112; --card:#1c1c1e; --ink:#f0f0f0; --mute:#9a9a9a; --line:#2c2c2e;
+    --shadow:0 1px 2px #0000004d, 0 8px 24px #00000033; } }
   * { box-sizing:border-box }
-  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui,-apple-system,sans-serif }
-  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap }
-  header h1 { font-size:17px; margin:0 }
-  header .mute { color:var(--mute) }
-  main { display:grid; grid-template-columns:minmax(300px,480px) 1fr; gap:16px; padding:16px }
-  @media (max-width:900px) { main { grid-template-columns:1fr } }
-  .stage { position:relative; aspect-ratio:1; background:#000; border-radius:10px; overflow:hidden; cursor:crosshair }
-  .stage img { width:100%; height:100%; display:block }
-  .stage .hint { position:absolute; left:8px; bottom:8px; color:#fff; background:#0008; padding:2px 8px; border-radius:6px; font-size:12px }
+  html { scroll-behavior:smooth }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased }
+  a { color:var(--accent) }
+
+  header { padding:18px 22px 14px; border-bottom:1px solid var(--line); background:var(--card) }
+  header .kicker { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); font-weight:700 }
+  header h1 { font-size:22px; margin:2px 0 4px; letter-spacing:-.01em }
+  header p { margin:0; color:var(--mute); max-width:70ch }
+  .statusline { margin-top:10px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--mute) }
+  .dot { width:8px; height:8px; border-radius:99px; background:var(--mute); display:inline-block; margin-right:5px }
+  .dot.live { background:var(--ok) } .dot.wait { background:var(--hit) }
+
+  main { display:grid; grid-template-columns:minmax(320px,460px) 1fr; gap:22px; padding:22px; max-width:1400px; margin:0 auto }
+  @media (max-width:920px) { main { grid-template-columns:1fr } }
+
+  .stage { position:relative; aspect-ratio:1; background:#000; border-radius:14px; overflow:hidden; cursor:crosshair; box-shadow:var(--shadow) }
+  .stage img#view { width:100%; height:100%; display:block }
+  .stage .hint { position:absolute; left:10px; bottom:10px; color:#fff; background:#0009; padding:3px 9px; border-radius:7px; font-size:12px }
   video, #grab { display:none }
-  .controls { margin-top:12px; display:grid; gap:10px }
-  .seg { display:flex; flex-wrap:wrap; gap:6px }
-  .seg button { border:1px solid var(--line); background:var(--card); color:var(--ink); padding:6px 10px; border-radius:8px; cursor:pointer }
+
+  .controls { margin-top:14px; display:grid; gap:14px }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; box-shadow:var(--shadow) }
+  .panel > .lbl { font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--mute); margin-bottom:8px; font-weight:600 }
+  .seg { display:flex; flex-wrap:wrap; gap:7px }
+  .seg button { border:1px solid var(--line); background:transparent; color:var(--ink); padding:7px 11px; border-radius:9px; cursor:pointer; font-size:13px; transition:.12s }
+  .seg button:hover { border-color:var(--ink) }
   .seg button.on { background:var(--ink); color:var(--bg); border-color:var(--ink) }
-  label.row { display:flex; gap:8px; align-items:center }
+  .stickerRow { display:flex; gap:12px; align-items:center; margin-top:12px }
+  .stickerRow img { width:64px; height:64px; border-radius:9px; background:#0000000a; object-fit:contain; border:1px solid var(--line) }
+  .stickerRow .cap { font-size:12px; color:var(--mute) }
+  label.row { display:flex; gap:10px; align-items:center; font-size:13px }
   label.row input[type=range] { flex:1 }
-  textarea { width:100%; min-height:54px; background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:6px; font:12px ui-monospace,monospace }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:10px; align-content:start }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px }
-  .card h3 { margin:0; font-size:14px; display:flex; justify-content:space-between; gap:6px }
-  .card .era { color:var(--mute); font-size:12px }
-  .badge { font-size:11px; padding:1px 6px; border-radius:99px; color:#fff; white-space:nowrap; align-self:center }
+  label.row .val { min-width:38px; text-align:right; color:var(--mute); font-variant-numeric:tabular-nums }
+  textarea { width:100%; min-height:60px; background:transparent; color:var(--ink); border:1px solid var(--line);
+             border-radius:9px; padding:8px; font:12px/1.4 ui-monospace,monospace; resize:vertical }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; align-content:start }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:13px 15px; box-shadow:var(--shadow); transition:outline .15s }
+  .card h3 { margin:0; font-size:15px; display:flex; justify-content:space-between; gap:8px; align-items:center }
+  .card .era { color:var(--mute); font-size:12px; margin-top:2px }
+  .badge { font-size:10.5px; padding:2px 8px; border-radius:99px; color:#fff; white-space:nowrap; font-weight:600 }
   .badge.seen { background:var(--seen) } .badge.unseen { background:var(--unseen) }
-  .cols { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:11px }
   .cols.one { grid-template-columns:1fr }
-  .col h4 { margin:0 0 3px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--mute) }
-  .pred { display:flex; justify-content:space-between; gap:6px; padding:2px 4px; border-radius:4px; font-size:13px }
+  .col h4 { margin:0 0 5px; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--mute) }
+  .pred { display:flex; justify-content:space-between; gap:8px; padding:3px 6px; border-radius:6px; font-size:13.5px }
   .pred .p { color:var(--mute); font-variant-numeric:tabular-nums }
-  .pred.hit { background:var(--hit); color:var(--hit-ink) } .pred.hit .p { color:var(--hit-ink) }
+  .pred.hit { background:var(--hit); color:var(--hit-ink); font-weight:600 } .pred.hit .p { color:var(--hit-ink) }
   .card.fooled { outline:2px solid var(--hit) }
-  .ms { color:var(--mute); font-size:11px; margin-top:4px }
-  a { color:inherit }
-  .camerr { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
-            justify-content:center; gap:10px; padding:20px; text-align:center; color:#fff;
-            background:#000c; font-size:13px }
-  .camerr button { border:1px solid #fff6; background:#fff; color:#000; padding:8px 14px;
-                   border-radius:8px; cursor:pointer; font-size:14px }
+  .ms { color:var(--mute); font-size:11px; margin-top:6px }
+
+  .camerr { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:12px; padding:24px; text-align:center; color:#fff; background:#000c; font-size:13.5px }
+  .camerr button { border:0; background:#fff; color:#000; padding:9px 16px; border-radius:9px; cursor:pointer; font-size:14px; font-weight:600 }
+
+  /* ---- VLM evidence section ---- */
+  .vlm { max-width:1400px; margin:0 auto; padding:8px 22px 40px }
+  .vlm h2 { font-size:19px; margin:6px 0 2px; letter-spacing:-.01em }
+  .vlm .sub { color:var(--mute); margin:0 0 4px; max-width:80ch }
+  .vlm .prov { font-size:12px; color:var(--mute); margin:0 0 16px }
+  .vlm .prov b { color:var(--ink) }
+  .headline { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:14px 0 22px }
+  @media (max-width:720px){ .headline { grid-template-columns:1fr } }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; box-shadow:var(--shadow) }
+  .stat .n { font-size:34px; font-weight:700; letter-spacing:-.02em; line-height:1 }
+  .stat .n.good { color:var(--ok) } .stat .n.mid { color:var(--accent) }
+  .stat .d { color:var(--mute); font-size:13px; margin-top:6px }
+  .evtable { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line);
+             border-radius:12px; overflow:hidden; box-shadow:var(--shadow); font-size:14px }
+  .evtable th { text-align:left; padding:10px 14px; font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+                color:var(--mute); border-bottom:1px solid var(--line); font-weight:600 }
+  .evtable td { padding:9px 14px; border-bottom:1px solid var(--line) }
+  .evtable tr:last-child td { border-bottom:0 }
+  .evtable .arrow { color:var(--mute); padding:0 4px }
+  .chip { display:inline-block; padding:2px 9px; border-radius:99px; font-size:12.5px; font-weight:600 }
+  .chip.banana { background:var(--hit); color:var(--hit-ink) }
+  .chip.held { background:#0000000f; color:var(--ink) }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .chip.held { background:#ffffff14 } }
+  .verdict { font-weight:600 }
+  .verdict.flip { color:var(--accent) } .verdict.hold { color:var(--mute) }
+  .note { font-size:13px; color:var(--mute); margin-top:14px; max-width:80ch; line-height:1.55 }
+  .note b { color:var(--ink) }
 </style>
 </head>
 <body>
 <header>
+  <div class="kicker">Adversarial patch · live</div>
   <h1>Can a sticker change what vision models see?</h1>
-  <span class="mute" id="status">connecting…</span>
-  <span class="mute" id="patchinfo"></span>
-  <a href="/print" target="_blank">print the patch</a>
+  <p>The panel on the right shows what real models see through your webcam. Paste the optimized
+     patch into the frame and watch every model flip to <b>“banana.”</b> The patch is pixels tuned by
+     optimization — not a picture of a banana.</p>
+  <div class="statusline">
+    <span><span class="dot" id="dot"></span><span id="status">connecting…</span></span>
+    <span id="patchinfo" class="mute"></span>
+    <a href="/print" target="_blank">print the patch →</a>
+    <a href="#vlm">jump to the VLM story ↓</a>
+  </div>
 </header>
+
 <main>
   <section>
-    <div class="stage" id="stage"><img id="view" alt="what the models see"><span class="hint" id="hint">click to move the sticker</span><div class="camerr" id="camerr" style="display:none"></div></div>
+    <div class="stage" id="stage">
+      <img id="view" alt="what the models see">
+      <span class="hint" id="hint">click to move the sticker</span>
+      <div class="camerr" id="camerr" style="display:none"></div>
+    </div>
     <video id="video" autoplay playsinline muted></video>
     <canvas id="grab" width="448" height="448"></canvas>
+
     <div class="controls">
-      <div>
-        <div class="mute" style="margin-bottom:4px">Sticker pasted on the frame</div>
+      <div class="panel">
+        <div class="lbl">Sticker pasted on the frame</div>
         <div class="seg" id="stickers"></div>
+        <div class="stickerRow" id="stickerPreviewRow" style="display:none">
+          <img id="stickerPreview" alt="sticker preview">
+          <span class="cap" id="stickerCap"></span>
+        </div>
       </div>
-      <label class="row">size <input type="range" id="area" min="0.02" max="0.35" step="0.01" value="0.12"><span id="areaVal">12%</span></label>
-      <label class="row">rotate <input type="range" id="angle" min="-45" max="45" step="1" value="0"></label>
-      <label class="row"><input type="checkbox" id="overlay" checked> show YOLO boxes/masks</label>
-      <div>
-        <div class="mute" style="margin-bottom:4px">Zero-shot labels for CLIP / SigLIP (one per line)</div>
+      <div class="panel">
+        <label class="row">size <input type="range" id="area" min="0.02" max="0.35" step="0.01" value="0.12"><span class="val" id="areaVal">12%</span></label>
+        <label class="row" style="margin-top:10px">rotate <input type="range" id="angle" min="-45" max="45" step="1" value="0"><span class="val" id="angleVal">0°</span></label>
+        <label class="row" style="margin-top:10px"><input type="checkbox" id="overlay" checked> show YOLO boxes/masks</label>
+      </div>
+      <div class="panel">
+        <div class="lbl">Zero-shot labels for CLIP / SigLIP (one per line)</div>
         <textarea id="labels"></textarea>
       </div>
     </div>
   </section>
+
   <section class="grid" id="cards"></section>
 </main>
+
+<section class="vlm" id="vlm">
+  <div class="kicker" style="color:var(--accent)">The VLM story</div>
+  <h2>Does it also fool a modern reasoning model?</h2>
+  <p class="sub">The classifiers above are the patch’s home turf. The harder question: does the same sticker
+     fool a current vision-language model that <b>reasons</b> about the scene — and that was <b>never trained
+     against the patch?</b> We tested <b>Qwen2.5-VL-3B</b>, asking only “What is the main object? One word.”</p>
+  <p class="prov">Evidence measured live on a <b>Colab A100</b> · model <b>Qwen/Qwen2.5-VL-3B-Instruct</b> (bf16) ·
+     patch <b>physical_banana</b>, never in the model’s training loop · deterministic greedy decode.</p>
+
+  <div class="headline">
+    <div class="stat"><div class="n good">~100%</div>
+      <div class="d">of <b>embedding / classifier</b> models flip to “banana” with the patch — they have no scene reasoning to fall back on (MobileNet & CLIP flip live, above, at ~99%).</div></div>
+    <div class="stat"><div class="n mid">6&nbsp;of&nbsp;8</div>
+      <div class="d">random, non-banana photos flip <b>Qwen2.5-VL</b> to “banana” at a modest 16% patch size. The reasoning model is fooled <b>most</b> of the time — but not always.</div></div>
+  </div>
+
+  <table class="evtable">
+    <thead><tr><th>Qwen2.5-VL sees (camera only)</th><th></th><th>with the patch pasted on</th><th>verdict</th></tr></thead>
+    <tbody>
+      <tr><td>garbage truck</td><td class="arrow">→</td><td><span class="chip banana">bananas</span></td><td class="verdict flip">flipped</td></tr>
+      <tr><td>fish</td><td class="arrow">→</td><td><span class="chip banana">banana</span></td><td class="verdict flip">flipped</td></tr>
+      <tr><td>cassette tape player</td><td class="arrow">→</td><td><span class="chip banana">bananas</span></td><td class="verdict flip">flipped</td></tr>
+      <tr><td>gas pump</td><td class="arrow">→</td><td><span class="chip banana">banana</span></td><td class="verdict flip">flipped</td></tr>
+      <tr><td>parachute</td><td class="arrow">→</td><td><span class="chip banana">bananas</span></td><td class="verdict flip">flipped</td></tr>
+      <tr><td>chainsaw</td><td class="arrow">→</td><td><span class="chip held">chainsaw</span></td><td class="verdict hold">held (even at 30%)</td></tr>
+      <tr><td>golf ball</td><td class="arrow">→</td><td><span class="chip held">golf ball</span></td><td class="verdict hold">held (even at 30%)</td></tr>
+    </tbody>
+  </table>
+
+  <p class="note"><b>The honest finding.</b> A patch optimized only against older CNNs and CLIP/SigLIP still
+     hijacks a newer model it never saw — a real cross-model transfer, and on a <i>reasoning</i> model at that.
+     The two hold-outs are the interesting part: images with one big, unambiguous, centered object (a golf ball
+     filling the frame, a chainsaw) sometimes let the VLM’s reasoning win, and growing the patch doesn’t force it.
+     So the claim is <b>“most images → banana, every embedding model → banana”</b> — not a magic 100%. That gap
+     between pattern-matching and reasoning is exactly what’s worth showing.</p>
+</section>
+
 <script>
 const STICKER_NAMES = { none:"camera only (use for a printed patch)", patch:"adversarial patch",
                         photo:"real photo of target (control)", noise:"random noise (control)",
                         mat:"the mat (object in centre window)" };
+const STICKER_CAPS = {
+  patch:"The optimized sticker itself. Pixels tuned to read as “banana” across a model ensemble — not a drawing.",
+  photo:"Control: an actual photo of the target. If this fooled models too, the patch would prove nothing.",
+  noise:"Control: random noise at the same size. Rules out “any clutter breaks the model.”",
+  mat:"The pivot: the object sits on an optimized placemat instead of wearing a sticker." };
 const $ = id => document.getElementById(id);
-let models = [], target = "banana", busy = false;
+let models = [], target = "banana", busy = false, available = [];
 const settings = { sticker:"patch", x:0.72, y:0.72, area:0.12, angle:0, overlay:true };
 
-// settings live client-side and ride along as query params on each /infer POST, so there is
-// nothing to "send" separately; labels change rarely, via their own POST.
 function send() {}
 function pushLabels(list) {
   fetch("/labels", { method:"POST", headers:{ "content-type":"application/json" },
                      body: JSON.stringify({ labels:list }) }).catch(() => {});
 }
 
-function renderStickers(available) {
+function renderStickers(avail) {
   const box = $("stickers"); box.innerHTML = "";
-  for (const k of ["none", ...available]) {
+  for (const k of ["none", ...avail]) {
     const b = document.createElement("button");
     b.textContent = STICKER_NAMES[k] || k; b.dataset.k = k;
     b.className = settings.sticker === k ? "on" : "";
-    b.onclick = () => { settings.sticker = k; send({ sticker:k }); renderStickers(available); };
+    b.onclick = () => { settings.sticker = k; renderStickers(avail); updatePreview(); };
     box.appendChild(b);
   }
   $("hint").style.display = settings.sticker === "none" ? "none" : "";
+}
+
+function updatePreview() {
+  const row = $("stickerPreviewRow");
+  const k = settings.sticker;
+  if (k === "none" || !available.includes(k)) { row.style.display = "none"; return; }
+  row.style.display = "flex";
+  $("stickerPreview").src = "/sticker/" + k + ".png?px=256";
+  $("stickerCap").textContent = STICKER_CAPS[k] || "";
 }
 
 function renderCards() {
@@ -140,23 +261,23 @@ function renderResults(msg) {
 }
 
 let camReady = false, metaOk = false;
-
 function setStatus() {
-  $("status").textContent = !metaOk ? "connecting…" : (camReady ? "live" : "connected — camera needed");
+  const d = $("dot");
+  if (!metaOk) { $("status").textContent = "connecting…"; d.className = "dot"; }
+  else if (camReady) { $("status").textContent = "live"; d.className = "dot live"; }
+  else { $("status").textContent = "connected — camera needed"; d.className = "dot wait"; }
 }
 
-// The model panel comes up first (from /meta), independent of the camera, so the page always
-// shows something even while the camera prompt is pending or was denied.
 async function fetchMeta() {
   try {
     const m = await (await fetch("/meta")).json();
-    models = m.models; target = m.target;
+    models = m.models; target = m.target; available = m.stickers;
     if (!m.stickers.includes("patch")) settings.sticker = "photo";
     $("labels").value = m.labels.join("\n");
     $("patchinfo").textContent = m.patch
-      ? `patch: ${m.patch.run} · target "${target}"${m.patch.physical ? " · print-robust" : ""}`
+      ? `patch: ${m.patch.run} · target “${target}”${m.patch.physical ? " · print-robust" : ""}`
       : "no patch loaded (controls only)";
-    metaOk = true; renderStickers(m.stickers); renderCards(); setStatus();
+    metaOk = true; renderStickers(m.stickers); renderCards(); updatePreview(); setStatus();
     initCamera();
   } catch (err) {
     $("status").textContent = "cannot reach server — is it still running? " + (err.message || "");
@@ -175,8 +296,8 @@ async function initCamera() {
     camReady = false; setStatus();
     box.style.display = "flex";
     box.innerHTML = `<div>Camera not available: ${esc(err.name || "error")}.<br>` +
-      `Allow camera access for this page (click the camera icon in the address bar), ` +
-      `then retry. The model panel on the right already works.</div>`;
+      `Allow camera access for this page (camera icon in the address bar), then retry. ` +
+      `The model panel already works, and the VLM story below needs no camera.</div>`;
     const btn = document.createElement("button");
     btn.textContent = "Enable camera";
     btn.onclick = initCamera;
@@ -189,7 +310,6 @@ function qs() {
     `&y=${settings.y.toFixed(4)}&area=${settings.area}&angle=${settings.angle}&overlay=${settings.overlay}`;
 }
 
-// one frame in flight at a time: POST the next only after the previous response is back
 function loop() {
   if (camReady && !busy) {
     const v = $("video"), side = Math.min(v.videoWidth, v.videoHeight);
@@ -210,10 +330,9 @@ function loop() {
 $("stage").onclick = e => {
   const r = e.currentTarget.getBoundingClientRect();
   settings.x = (e.clientX - r.left) / r.width; settings.y = (e.clientY - r.top) / r.height;
-  send({ x:settings.x, y:settings.y });
 };
-$("area").oninput = e => { settings.area = +e.target.value; $("areaVal").textContent = Math.round(settings.area*100) + "%"; send({ area:settings.area }); };
-$("angle").oninput = e => { settings.angle = +e.target.value; send({ angle:settings.angle }); };
+$("area").oninput = e => { settings.area = +e.target.value; $("areaVal").textContent = Math.round(settings.area*100) + "%"; };
+$("angle").oninput = e => { settings.angle = +e.target.value; $("angleVal").textContent = settings.angle + "°"; };
 $("overlay").onchange = e => { settings.overlay = e.target.checked; };
 let labelTimer;
 $("labels").oninput = () => { clearTimeout(labelTimer); labelTimer = setTimeout(() => pushLabels($("labels").value.split("\n")), 600); };
