@@ -19,6 +19,15 @@ dependencies = [
     "pandas>=2.1",
 ]
 
+[project.optional-dependencies]
+# CLIP/SigLIP ensemble members (models.py) + VLM transfer eval (eval_vlm.py)
+vlm = [
+    "open_clip_torch>=2.24",
+    "transformers>=5.0",  # eval_vlm uses the v5 dtype=/processor_kwargs API
+    "accelerate",
+    "num2words",  # SmolVLM processor dependency
+]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }
 torchvision = { index = "pytorch-cu130" }

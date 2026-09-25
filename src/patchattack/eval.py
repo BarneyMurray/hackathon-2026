@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from patchattack.models import load_ensemble
+from patchattack.models import default_device, load_ensemble
 from patchattack.patch import Patch
 from patchattack.reference_embeddings import build_eval_gallery
 from patchattack.transforms import EOTConfig, apply_patch, sample_eot_params
@@ -116,7 +116,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--patch-path", type=Path, required=True)
     ap.add_argument("--max-images", type=int, default=400)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--device", default=default_device())
     ap.add_argument("--eval-ensemble", nargs="+", default=None,
                      help="evaluate against these models instead of the training ensemble "
                           "(e.g. to test black-box transfer to models the patch never saw)")

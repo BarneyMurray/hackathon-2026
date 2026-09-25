@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 
 from patchattack.data import make_background_loader
-from patchattack.models import load_ensemble
+from patchattack.models import default_device, load_ensemble
 from patchattack.patch import Patch
 from patchattack.reference_embeddings import BANANA_REFS, load_or_compute_training_target
 from patchattack.transforms import BOTTOM_LEFT_CORNER, EOTConfig, apply_patch, sample_eot_params
@@ -34,7 +34,7 @@ class TrainConfig:
     eot: EOTConfig = field(default_factory=EOTConfig)
     log_every: int = 20
     preview_every: int = 200
-    device: str = "cuda"
+    device: str = field(default_factory=default_device)
     fixed_area_frac: float | None = None  # sanity-check mode: pin area_frac instead of EOT sweep
     target_name: str = "banana"
     target_refs_dir: str = str(BANANA_REFS)
@@ -49,8 +49,16 @@ def cycle(loader):
             yield batch
 
 
+def save_checkpoint(patch, cfg: TrainConfig, out_dir: Path, log_rows: list, val_log_rows: list) -> None:
+    """Write patch.pt + CSV logs so an interrupted run still leaves a usable patch."""
+    pd.DataFrame(log_rows).to_csv(out_dir / "train_log.csv", index=False)
+    if val_log_rows:
+        pd.DataFrame(val_log_rows).to_csv(out_dir / "val_log.csv", index=False)
+    torch.save({"raw": patch.raw.detach().cpu(), "cfg": asdict(cfg)}, out_dir / "patch.pt")
+
+
 def train(cfg: TrainConfig) -> Path:
-    device = cfg.device if torch.cuda.is_available() else "cpu"
+    device = cfg.device
     out_dir = OUT_ROOT / cfg.run_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,77 +90,77 @@ def train(cfg: TrainConfig) -> Path:
     log_rows = []
     val_log_rows = []
 
-    for step in range(cfg.steps):
-        bg = next(loader_iter).to(device)
-        B = bg.shape[0]
+    try:
+        for step in range(cfg.steps):
+            bg = next(loader_iter).to(device)
+            B = bg.shape[0]
 
-        if cfg.fixed_area_frac is not None:
-            # sanity-check mode: keep random rotation + translation from the normal EOT
-            # sampler, but pin area_frac to a fixed value (translation bounds are derived
-            # from this fixed area too, so placement stays correctly in-frame) so convergence
-            # is faster/easier to read than under the full log-uniform sweep.
-            fixed_cfg = EOTConfig(
-                canonical_size=eot_cfg.canonical_size,
-                rotation_deg=eot_cfg.rotation_deg,
-                area_frac_range=(cfg.fixed_area_frac, cfg.fixed_area_frac),
-                log_uniform_area=False,
-                corner=eot_cfg.corner, corner_margin_px=eot_cfg.corner_margin_px, corner_jitter_frac=eot_cfg.corner_jitter_frac,
-            )
-            params = sample_eot_params(B, fixed_cfg, device)
-        else:
-            params = sample_eot_params(B, eot_cfg, device)
+            if cfg.fixed_area_frac is not None:
+                # sanity-check mode: keep random rotation + translation from the normal EOT
+                # sampler, but pin area_frac to a fixed value (translation bounds are derived
+                # from this fixed area too, so placement stays correctly in-frame) so convergence
+                # is faster/easier to read than under the full log-uniform sweep.
+                fixed_cfg = EOTConfig(
+                    canonical_size=eot_cfg.canonical_size,
+                    rotation_deg=eot_cfg.rotation_deg,
+                    area_frac_range=(cfg.fixed_area_frac, cfg.fixed_area_frac),
+                    log_uniform_area=False,
+                    corner=eot_cfg.corner, corner_margin_px=eot_cfg.corner_margin_px, corner_jitter_frac=eot_cfg.corner_jitter_frac,
+                )
+                params = sample_eot_params(B, fixed_cfg, device)
+            else:
+                params = sample_eot_params(B, eot_cfg, device)
 
-        composite = apply_patch(patch, bg, params)
+            composite = apply_patch(patch, bg, params)
 
-        per_model_loss = {}
-        for name, model in models.items():
-            emb = model.embed(composite)
-            emb = F.normalize(emb, dim=-1)
-            cos_sim = (emb * targets[name]).sum(dim=-1).clamp(-1, 1)
-            per_model_loss[name] = 1.0 - cos_sim.mean()
+            per_model_loss = {}
+            for name, model in models.items():
+                emb = model.embed(composite)
+                emb = F.normalize(emb, dim=-1)
+                cos_sim = (emb * targets[name]).sum(dim=-1).clamp(-1, 1)
+                per_model_loss[name] = 1.0 - cos_sim.mean()
 
-        loss = sum(per_model_loss.values()) / len(per_model_loss)
+            loss = sum(per_model_loss.values()) / len(per_model_loss)
 
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
 
-        if step % cfg.log_every == 0 or step == cfg.steps - 1:
-            row = {"step": step, "loss": loss.item()}
-            for name, l in per_model_loss.items():
-                row[f"cos_sim_{name}"] = 1.0 - l.item()
-            log_rows.append(row)
-            print(f"[{cfg.run_name}] step {step:5d}  loss {loss.item():.4f}  " +
-                  "  ".join(f"{n}={1 - l.item():.3f}" for n, l in per_model_loss.items()))
+            if step % cfg.log_every == 0 or step == cfg.steps - 1:
+                row = {"step": step, "loss": loss.item()}
+                for name, l in per_model_loss.items():
+                    row[f"cos_sim_{name}"] = 1.0 - l.item()
+                log_rows.append(row)
+                print(f"[{cfg.run_name}] step {step:5d}  loss {loss.item():.4f}  " +
+                      "  ".join(f"{n}={1 - l.item():.3f}" for n, l in per_model_loss.items()))
 
-        if step % cfg.preview_every == 0 or step == cfg.steps - 1:
-            save_patch_preview(patch, out_dir / f"preview_step{step:05d}.png")
+            if step % cfg.preview_every == 0 or step == cfg.steps - 1:
+                save_patch_preview(patch, out_dir / f"preview_step{step:05d}.png")
+                save_checkpoint(patch, cfg, out_dir, log_rows, val_log_rows)
 
-        if val_loader_iter is not None and (step % cfg.val_every == 0 or step == cfg.steps - 1):
-            with torch.no_grad():
-                val_per_model_loss = {name: 0.0 for name in models}
-                for _ in range(cfg.val_batches):
-                    val_bg = next(val_loader_iter).to(device)
-                    val_params = sample_eot_params(val_bg.shape[0], eot_cfg, device)
-                    val_composite = apply_patch(patch, val_bg, val_params)
-                    for name, model in models.items():
-                        emb = model.embed(val_composite)
-                        emb = F.normalize(emb, dim=-1)
-                        cos_sim = (emb * targets[name]).sum(dim=-1).clamp(-1, 1)
-                        val_per_model_loss[name] += (1.0 - cos_sim.mean()).item() / cfg.val_batches
-                val_loss = sum(val_per_model_loss.values()) / len(val_per_model_loss)
-            val_row = {"step": step, "val_loss": val_loss}
-            for name, l in val_per_model_loss.items():
-                val_row[f"val_cos_sim_{name}"] = 1.0 - l
-            val_log_rows.append(val_row)
-            print(f"[{cfg.run_name}] step {step:5d}  VAL  loss {val_loss:.4f}  " +
-                  "  ".join(f"{n}={1 - l:.3f}" for n, l in val_per_model_loss.items()))
+            if val_loader_iter is not None and (step % cfg.val_every == 0 or step == cfg.steps - 1):
+                with torch.no_grad():
+                    val_per_model_loss = {name: 0.0 for name in models}
+                    for _ in range(cfg.val_batches):
+                        val_bg = next(val_loader_iter).to(device)
+                        val_params = sample_eot_params(val_bg.shape[0], eot_cfg, device)
+                        val_composite = apply_patch(patch, val_bg, val_params)
+                        for name, model in models.items():
+                            emb = model.embed(val_composite)
+                            emb = F.normalize(emb, dim=-1)
+                            cos_sim = (emb * targets[name]).sum(dim=-1).clamp(-1, 1)
+                            val_per_model_loss[name] += (1.0 - cos_sim.mean()).item() / cfg.val_batches
+                    val_loss = sum(val_per_model_loss.values()) / len(val_per_model_loss)
+                val_row = {"step": step, "val_loss": val_loss}
+                for name, l in val_per_model_loss.items():
+                    val_row[f"val_cos_sim_{name}"] = 1.0 - l
+                val_log_rows.append(val_row)
+                print(f"[{cfg.run_name}] step {step:5d}  VAL  loss {val_loss:.4f}  " +
+                      "  ".join(f"{n}={1 - l:.3f}" for n, l in val_per_model_loss.items()))
+    except KeyboardInterrupt:
+        print(f"[{cfg.run_name}] interrupted at step {step}, saving checkpoint")
 
-    df = pd.DataFrame(log_rows)
-    df.to_csv(out_dir / "train_log.csv", index=False)
-    if val_log_rows:
-        pd.DataFrame(val_log_rows).to_csv(out_dir / "val_log.csv", index=False)
-    torch.save({"raw": patch.raw.detach().cpu(), "cfg": asdict(cfg)}, out_dir / "patch.pt")
+    save_checkpoint(patch, cfg, out_dir, log_rows, val_log_rows)
     plot_training_curves(out_dir / "train_log.csv", out_dir / "train_curves.png",
                           val_csv_path=out_dir / "val_log.csv" if val_log_rows else None)
     print(f"[{cfg.run_name}] done -> {out_dir}")
