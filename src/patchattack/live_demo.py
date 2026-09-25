@@ -332,6 +332,10 @@ class Demo:
                     lambda: Detector(args.detector, self.device),
                 )
             )
+        if getattr(args, "light", False):
+            # keep only the responsive models so the whole panel runs per-frame on a laptop CPU/MPS
+            keep = {"mobilenet_v3_large", "clip_b32"}
+            specs = [s for s in specs if s[0].key in keep]
         self.models = {}
         self.infos = []
         for info, make in specs:
@@ -598,6 +602,12 @@ def main():
     )
     ap.add_argument("--detector", default="yolo11n-seg.pt")
     ap.add_argument("--no-detector", action="store_true")
+    ap.add_argument(
+        "--light",
+        action="store_true",
+        help="laptop-friendly: load only MobileNet + CLIP, and disable YOLO + the chat VLM, "
+        "so every panel updates per frame without bogging the machine down",
+    )
     ap.add_argument("--device", default=default_device())
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
@@ -609,6 +619,9 @@ def main():
     )
     ap.add_argument("--area", type=float, default=0.12, help="selftest only")
     args = ap.parse_args()
+    if args.light:
+        args.no_detector = True
+        args.vlm = []
 
     demo = Demo(args)
     if args.selftest:
