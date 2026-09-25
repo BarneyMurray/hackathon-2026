@@ -214,6 +214,54 @@ class ChatVLM:
         ).strip()
 
 
+class OpenAIVLM:
+    """A vision model served over an OpenAI-compatible /chat/completions endpoint -- e.g. a
+    multimodal model loaded in LM Studio (http://localhost:1234/v1) or Ollama. The model runs
+    in that server's own process (and its own GPU), so this demo never loads it: each frame is
+    sent as a base64 data-URI image. `model="auto"` picks the first model the server lists."""
+
+    def __init__(self, base_url: str, model: str = "auto", timeout: float = 30.0):
+        import requests
+
+        self._requests = requests
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        if model == "auto":
+            data = requests.get(f"{self.base_url}/models", timeout=10).json()
+            ids = [m["id"] for m in data.get("data", [])]
+            if not ids:
+                raise RuntimeError(f"no models served at {self.base_url}")
+            model = ids[0]
+        self.model = model
+
+    def ask(self, image: Image.Image, prompt: str = VLM_PROMPT) -> str:
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=85)
+        uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        payload = {
+            "model": self.model,
+            "max_tokens": 20,
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": uri}},
+                    ],
+                }
+            ],
+        }
+        try:
+            r = self._requests.post(
+                f"{self.base_url}/chat/completions", json=payload, timeout=self.timeout
+            )
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:  # keep the demo alive if the server hiccups
+            return f"[vlm error: {type(e).__name__}]"
+
+
 # ---------------------------------------------------------------- stickers (patch + controls)
 def photo_patch(path: Path, size: int, device: str) -> Patch:
     """A Patch whose pixels are a real photo, centre-cropped to the same circle as the adversarial
@@ -377,6 +425,26 @@ class Demo:
                 }
             )
             print(f"  {name:20s} {time.time() - t0:5.1f}s")
+
+        # A vision model served by LM Studio / Ollama over an OpenAI-compatible endpoint. It runs
+        # in that server's process (its own GPU), so this demo never loads it.
+        if getattr(args, "vlm_openai", None):
+            t0 = time.time()
+            vlm = OpenAIVLM(args.vlm_openai, args.vlm_openai_model)
+            key = "vlm:openai"
+            self.vlms[key] = vlm
+            self.infos.append(
+                {
+                    "key": key,
+                    "name": vlm.model.split("/")[-1],
+                    "era": "local · chat VLM (LM Studio)",
+                    "task": f'asked: "{VLM_PROMPT}"',
+                    "ensemble_name": None,
+                    "seen": False,
+                }
+            )
+            print(f"  {vlm.model:20s} (LM Studio) {time.time() - t0:4.1f}s")
+
         self.vlm_answers: dict[str, dict[str, str]] = {}
         self.vlm_frames: dict[str, torch.Tensor] = {}
         self.stop = threading.Event()
@@ -645,8 +713,23 @@ def main():
     ap.add_argument(
         "--vlm",
         nargs="*",
-        default=DEFAULT_VLMS,
-        help="HF chat-VLM ids, e.g. Qwen/Qwen2.5-VL-3B-Instruct; pass --vlm with no ids to disable",
+        default=None,
+        help="HF chat-VLM ids, e.g. Qwen/Qwen2.5-VL-3B-Instruct; pass --vlm with no ids to "
+        "disable. Default: none under --light, else SmolVLM-500M. The VLM runs in a background "
+        "thread, so adding it to --light keeps the classifier panel fast.",
+    )
+    ap.add_argument(
+        "--vlm-openai",
+        default=None,
+        metavar="BASE_URL",
+        help="OpenAI-compatible vision endpoint to add as a VLM card, e.g. LM Studio's "
+        "http://localhost:1234/v1 (load a vision model there first). Runs in that server, "
+        "not in this process. Combine with --light for a fast local panel + a local VLM.",
+    )
+    ap.add_argument(
+        "--vlm-openai-model",
+        default="auto",
+        help="model id at --vlm-openai; 'auto' uses the first one the server lists",
     )
     ap.add_argument(
         "--mat-path",
@@ -660,7 +743,7 @@ def main():
     ap.add_argument(
         "--light",
         action="store_true",
-        help="laptop-friendly: load only MobileNet + CLIP, and disable YOLO + the chat VLM, "
+        help="laptop-friendly: load only MobileNet + CLIP and disable YOLO (VLM off unless --vlm is given), "
         "so every panel updates per frame without bogging the machine down",
     )
     ap.add_argument("--device", default=default_device())
@@ -676,7 +759,10 @@ def main():
     args = ap.parse_args()
     if args.light:
         args.no_detector = True
-        args.vlm = []
+    if args.vlm is None:
+        # default: no VLM under --light (for speed), else SmolVLM-500M. An explicit --vlm is
+        # always honoured, so `--light --vlm <id>` keeps the light panel AND adds the VLM.
+        args.vlm = [] if args.light else list(DEFAULT_VLMS)
 
     demo = Demo(args)
     if args.selftest:
